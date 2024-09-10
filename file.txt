@@ -1,1 +1,5 @@
-ls
+Makefile
+README.md
+file.txt
+yash
+yash.c
