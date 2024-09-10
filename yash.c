@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <linux/stat.h>
 
 #define MAX_LINE_CHAR 2000
 #define DELIM " \t\n"
@@ -60,14 +62,62 @@ void execute_command(Command *cmd) {
     pid_t pid = fork();
     int status;
 
-    if (pid == 0) {
+    if (pid < 0) {
+        perror("fork error");
+        exit(EXIT_FAILURE);
+    } else if (pid == 0) {
         if (handle_redirection(cmd) == 0) {
-            execvp(cmd->command, cmd->args);
+            if (execvp(cmd->command, cmd->args) == -1)
+                exit(EXIT_FAILURE);
         } 
         exit(EXIT_SUCCESS);
     } else {
         waitpid(pid, &status, 0);
     }
+}
+
+void execute_pipe(Command *left_command, Command *right_command) {
+    int pipefd[2];
+    pid_t pid1, pid2;
+    int status;
+
+    if (pipe(pipefd) == -1) {
+        perror("pipe error");
+        exit(EXIT_FAILURE);
+    }
+
+    pid1 = fork();
+    if (pid1 < 0) {
+        perror("fork error");
+        exit(EXIT_FAILURE);
+    } else if (pid1 == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        if (execvp(left_command->command, left_command->args) == -1) {
+            fprintf(stderr, "%s: command not found\n", left_command->command);
+            exit(EXIT_FAILURE);
+        }
+    } 
+
+    pid2 = fork();
+    if (pid2 < 0) {
+        perror("fork error");
+        exit(EXIT_FAILURE);
+    } else if (pid2 == 0) {
+        close(pipefd[1]);
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[0]);
+        if (execvp(right_command->command, right_command->args) == -1) {
+            fprintf(stderr, "%s: command not found\n", right_command->command);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+    waitpid(pid1, &status, 0);
+    waitpid(pid2, &status, 0);
 }
 
 int handle_redirection(Command *cmd) {
@@ -87,7 +137,7 @@ int handle_redirection(Command *cmd) {
     }
 
     if (cmd->output_file != NULL) {
-        fd = open(cmd->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        fd = open(cmd->output_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
         if (dup2(fd, STDOUT_FILENO) < 0) {
             close(fd);
             return -1;
@@ -96,7 +146,7 @@ int handle_redirection(Command *cmd) {
     }
 
     if (cmd->error_file != NULL) {
-        fd = open(cmd->error_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        fd = open(cmd->error_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
         if (dup2(fd, STDERR_FILENO) < 0) {
             close(fd);
             return -1;
@@ -153,13 +203,6 @@ Command* parse_input(char *input) {
     return cmd;
 }
 
-Command** parse_pipe_input(char *left_command, char *right_command) {
-    Command **commands = (Command **) malloc(2 * sizeof(Command *));
-    commands[0] = parse_input(left_command);
-    commands[1] = parse_input(right_command);
-    return commands;
-}
-
 int main() {
     char *command;
 
@@ -177,7 +220,12 @@ int main() {
             *pipe_pos = '\0';
             char *left_command = command;
             char *right_command = pipe_pos + 1;
-            Command **commands = parse_pipe_input(left_command, right_command);
+
+            // allocate array for each command in the pipe
+            Command **commands = (Command **) malloc(2 * sizeof(Command *));
+            commands[0] = parse_input(left_command);
+            commands[1] = parse_input(right_command);
+            execute_pipe(commands[0], commands[1]);
             free_command(commands[0]);
             free_command(commands[1]);
             free(commands);
