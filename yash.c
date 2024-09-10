@@ -4,6 +4,7 @@
 #include <readline/readline.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #define MAX_LINE_CHAR 2000
 #define DELIM " \t\n"
@@ -17,6 +18,8 @@ typedef struct {
     int background;
 } Command;
 
+int handle_redirection(Command *cmd);
+
 void init_command(Command *cmd) {
     cmd->command = NULL;
     cmd->args = NULL;
@@ -29,9 +32,8 @@ void init_command(Command *cmd) {
 void free_command(Command *cmd) {
     if (cmd->command) free(cmd->command);
     if (cmd->args) {
-        for (int i = 0; cmd->args[i] != NULL; i++) {
+        for (int i = 0; cmd->args[i] != NULL; i++)
             free(cmd->args[i]);
-        }
         free(cmd->args);
     }
     if (cmd->input_file) free(cmd->input_file);
@@ -39,63 +41,103 @@ void free_command(Command *cmd) {
     if (cmd->error_file) free(cmd->error_file);
 }
 
+/*
+For debugging purposes
+*/
+void print_command(Command *cmd) {
+    if (cmd->command) printf("command: %s\n", cmd->command);
+    if (cmd->args) {
+        for (int i = 0; cmd->args[i] != NULL; i++) 
+            printf("arg%d: %s\n", i, cmd->args[i]);
+    }
+    if (cmd->input_file) printf("input file: %s\n", cmd->input_file);
+    if (cmd->output_file) printf("output file: %s\n", cmd->output_file);
+    if (cmd->error_file) printf("error file: %s\n", cmd->error_file);
+}
+
 void execute_command(Command *cmd) {
     pid_t pid = fork();
+    int status;
 
     if (pid == 0) {
-
+        if (handle_redirection(cmd) == 0) {
+            if (execvp(cmd->command, cmd->args) == -1) {
+                printf("\n");
+            }
+        }
+    } else {
+        waitpid(pid, &status, 0);
     }
 }
 
-void handle_redirection(char **file, char *token, int*curr_len) {
-    if (token != NULL) {
-        *curr_len += strlen(token);
-        *file = strdup(token);
-    }
-}
+int handle_redirection(Command *cmd) {
+    int fd;
 
-void parse_redirection(char *token, Command *cmd, int *curr_len) {
-    token = strtok(NULL, DELIM);
-    
-    if (strcmp(token, "<") == 0) {
-        handle_redirection(&cmd->input_file, token, curr_len);
-    } else if (strcmp(token, ">") == 0) {
-        handle_redirection(&cmd->output_file, token, curr_len);
-    } else if (strcmp(token, "2>") == 0) {
-        handle_redirection(&cmd->error_file, token, curr_len);
+    if (cmd->input_file != NULL) {
+        fd = open(cmd->input_file, O_RDONLY);
+        if (dup2(fd, STDIN_FILENO) < 0) {
+            close(fd);
+            return -1;
+        }
+        close(fd);
     }
+
+    if (cmd->output_file != NULL) {
+        fd = open(cmd->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            close(fd);
+            return -1;
+        }
+        close(fd);
+    }
+
+    if (cmd->error_file != NULL) {
+        fd = open(cmd->error_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (dup2(fd, STDERR_FILENO) < 0) {
+            close(fd);
+            return -1;
+        }
+        close(fd);
+    }
+
+    return 0;
 }
 
 /*
 Parses input string into 2D character array
 */
 Command* parse_input(char *input) {
-    char **tokens = malloc(MAX_LINE_CHAR / 2 * sizeof(char* )); // dynamic tokens array
     char *token;
+    char *save_ptr;
     int i = 0;
     int curr_len = 0; 
     int arg_index = 0;
     int args_size = 8;
-    Command* cmd;
+    Command *cmd = (Command* ) malloc(sizeof(Command));
     init_command(cmd);
 
-    cmd->args = (char **) malloc(args_size * sizeof(char* ));
-    if (cmd->args == NULL) {
-        perror("malloc");
-        exit(EXIT_FAILURE);
-    }
-
+    cmd->args = (char **) malloc(args_size * sizeof(char *));
     token = strtok(input, DELIM);
 
     while (token != NULL && curr_len < MAX_LINE_CHAR) {
         curr_len += strlen(token);
 
         if (strcmp(token, ">") == 0 || strcmp(token, "<") == 0 || strcmp(token, "2>") == 0) {
-            parse_redirection(token, cmd, &curr_len);
-        } else {
-            if (cmd->command == NULL) {
-                cmd->command = strdup(token);
+            char *file_name = strtok(NULL, DELIM);
+    
+            if (file_name != NULL) {
+                if (strcmp(token, "<") == 0) 
+                    cmd->input_file = strdup(file_name);
+                else if (strcmp(token, ">") == 0) {
+                    cmd->output_file = strdup(file_name);
+                } else if (strcmp(token, "2>") == 0)
+                    cmd->error_file = strdup(file_name);
+
+                curr_len += strlen(file_name);
             }
+        } else {
+            if (cmd->command == NULL)
+                cmd->command = strdup(token);
 
             if (arg_index >= args_size - 1) {
                 args_size *= 2;
@@ -107,13 +149,13 @@ Command* parse_input(char *input) {
 
         token = strtok(NULL, DELIM);
     }
+
+    cmd->args[arg_index] = NULL;
+    return cmd;
 }
 
 int main() {
     char *command;
-    char **tokens;
-    pid_t curr_pid;
-    int status;
 
     while (1) {
         command = readline("# "); 
@@ -122,19 +164,10 @@ int main() {
             printf("\n");
             break;
         } 
-        
-        Command* cmd = parse_input(command);
-        curr_pid = fork();
 
-        if (curr_pid == 0) {
-            if (execvp(tokens[0], tokens) == -1) {
-                continue;
-            }
-        } else {
-            waitpid(curr_pid, &status, 0);
-        }
-
-        free_command(command);
+        Command *cmd = parse_input(command);
+        execute_command(cmd);
+        free_command(cmd);
     }
     
     return 0;
