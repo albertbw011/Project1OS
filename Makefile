@@ -1,5 +1,8 @@
-yash.o: yash.c
-    gcc -c yash.c -lreadline
+yash: yash.c
+	gcc -o yash yash.c -l readline
+
+run: yash
+	./yash
 
 clean:
-    rm -f yash.o yash.c yash
+	rm -f yash

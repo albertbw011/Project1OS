@@ -7,9 +7,12 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <linux/stat.h>
+#include <signal.h>
 
-#define MAX_LINE_CHAR 2000
 #define DELIM " \t\n"
+
+pid_t pid1 = -1;
+pid_t pid2 = -1;
 
 typedef struct {
     char *command;
@@ -58,27 +61,95 @@ void print_command(Command *cmd) {
     if (cmd->error_file) printf("error file: %s\n", cmd->error_file);
 }
 
+/*
+Handle signals
+*/
+void sig_handler(int signo) {
+    switch (signo) {
+        case SIGINT:
+            if (pid1 > 0) {
+                kill(pid1, SIGINT);
+            } 
+			if (pid2 > 0) {
+				kill(pid2, SIGINT);
+			}
+
+			if (pid1 > 0 || pid2 > 0) {
+				printf("\n");
+			}
+
+			if (pid1 == -1 && pid2 == -1) {
+				printf("\n");
+				rl_replace_line("", 0);
+				rl_on_new_line();
+				rl_redisplay();
+			}
+            break;
+
+        case SIGSTOP:
+            if (pid1 > 0) {
+                kill(pid1, SIGTSTP);
+            }
+			if (pid2 > 0) {
+                kill(pid2, SIGTSTP);
+            }
+            break;
+        
+        case SIGCHLD: 
+		{
+            int status;
+            pid_t pid;
+
+            while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+                if (pid == pid1) {
+                    if (WIFEXITED(status) || WIFSIGNALED(status) || WIFSTOPPED(status)) {
+                        pid1 = -1;  
+                    }
+                }
+				if (pid == pid2) {
+					if (WIFEXITED(status) || WIFSIGNALED(status) || WIFSTOPPED(status)) {
+                        pid2 = -1;  
+                    }
+				}
+			}
+		}
+            break;
+    }
+}
+
+void setup_signal_handlers() {
+    signal(SIGINT, sig_handler);
+    signal(SIGTSTP, sig_handler);
+    signal(SIGCHLD, sig_handler);
+}
+
+/*
+Executes commands with execvp()
+*/
 void execute_command(Command *cmd) {
-    pid_t pid = fork();
+    pid1 = fork();
     int status;
 
-    if (pid < 0) {
+    if (pid1 < 0) {
         perror("fork error");
         exit(EXIT_FAILURE);
-    } else if (pid == 0) {
+    } else if (pid1 == 0) {
         if (handle_redirection(cmd) == 0) {
             if (execvp(cmd->command, cmd->args) == -1)
                 exit(EXIT_FAILURE);
         } 
-        exit(EXIT_SUCCESS);
     } else {
-        waitpid(pid, &status, 0);
+        waitpid(pid1, &status, WUNTRACED);
+		pid1 = -1;
     }
 }
 
+/*
+Executes commands with pipes
+Takes in two Command structs as inputs
+*/
 void execute_pipe(Command *left_command, Command *right_command) {
     int pipefd[2];
-    pid_t pid1, pid2;
     int status;
 
     if (pipe(pipefd) == -1) {
@@ -118,8 +189,14 @@ void execute_pipe(Command *left_command, Command *right_command) {
     close(pipefd[1]);
     waitpid(pid1, &status, 0);
     waitpid(pid2, &status, 0);
+
+	pid1 = -1;
+	pid2 = -1;
 }
 
+/*
+Update necessary files based on input, output, error in Command struct
+*/
 int handle_redirection(Command *cmd) {
     int fd;
 
@@ -157,6 +234,9 @@ int handle_redirection(Command *cmd) {
     return 0;
 }
 
+/*
+Update command struct based on the file redirection symbol
+*/
 void parse_redirection(Command *cmd, char *token, char **save_ptr) {
     char *file_name = strtok_r(NULL, DELIM, save_ptr);
     
@@ -169,7 +249,7 @@ void parse_redirection(Command *cmd, char *token, char **save_ptr) {
 }
 
 /*
-Parses input string into 2D character array
+Parses input string into Command object
 */
 Command* parse_input(char *input) {
     char *token;
@@ -207,15 +287,19 @@ int main() {
     char *command;
 
     while (1) {
+		setup_signal_handlers();
         command = readline("# "); 
 
+		// exit shell if Ctrl+D
         if (command == NULL) {
-            printf("\n");
             break;
         } 
 
+		// check for pipe
         char *pipe_pos = strstr(command, "|");
         
+		// if there is a pipe, we parse each side into its own Command struct
+		// otherwise we execute the command as is
         if (pipe_pos != NULL) {
             *pipe_pos = '\0';
             char *left_command = command;
@@ -233,6 +317,7 @@ int main() {
             Command *cmd = parse_input(command);
             execute_command(cmd);
             free_command(cmd);
+			free(cmd);
         }
     }
     
