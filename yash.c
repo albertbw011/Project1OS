@@ -8,59 +8,15 @@
 #include <sys/stat.h>
 #include <linux/stat.h>
 #include <signal.h>
-#include "parsing.c"
 
-#define DELIM " \t\n"
+#include "parsing.c"
+#include "jobs.c"
 
 pid_t pid1 = -1;
 pid_t pid2 = -1;
 
-typedef struct {
-    char *command;
-    char **args;
-    char *input_file;
-    char *output_file;
-    char *error_file;
-    int background;
-} Command;
 
 int handle_redirection(Command *cmd);
-
-void init_command(Command *cmd) {
-    cmd->command = NULL;
-    cmd->args = NULL;
-    cmd->input_file = NULL;
-    cmd->output_file = NULL;
-    cmd->error_file = NULL;
-    cmd->background = 0;
-}
-
-void free_command(Command *cmd) {
-    if (cmd->command) free(cmd->command);
-    if (cmd->args) {
-        for (int i = 0; cmd->args[i] != NULL; i++)
-            free(cmd->args[i]);
-        free(cmd->args);
-    }
-    if (cmd->input_file) free(cmd->input_file);
-    if (cmd->output_file) free(cmd->output_file);
-    if (cmd->error_file) free(cmd->error_file);
-}
-
-/*
-For debugging purposes
-Prints each element of Command object
-*/
-void print_command(Command *cmd) {
-    if (cmd->command) printf("command: %s\n", cmd->command);
-    if (cmd->args) {
-        for (int i = 0; cmd->args[i] != NULL; i++) 
-            printf("arg%d: %s\n", i, cmd->args[i]);
-    }
-    if (cmd->input_file) printf("input file: %s\n", cmd->input_file);
-    if (cmd->output_file) printf("output file: %s\n", cmd->output_file);
-    if (cmd->error_file) printf("error file: %s\n", cmd->error_file);
-}
 
 /*
 Handle signals
@@ -136,7 +92,18 @@ void execute_command(Command *cmd) {
                 exit(EXIT_FAILURE);
         } 
     } else {
-        waitpid(pid1, &status, WUNTRACED);
+		setpgid(pid1, pid1);
+		add_job(pid1, *cmd, cmd->background ? BACKGROUND : RUNNING);
+
+		if (!cmd->background) {
+			int status;
+			waitpid(pid1, &status, WUNTRACED);
+
+			if (WIFSTOPPED(status)) {
+				// WIP
+			}
+		}
+        
 		pid1 = -1;
     }
 }
