@@ -1,6 +1,1 @@
-total 36
--rw-r--r-- 1 albertbw011 albertbw011    64 Sep 11 20:26 Makefile
--rw-r--r-- 1 albertbw011 albertbw011    21 Sep  4 16:28 README.md
--rw-r--r-- 1 albertbw011 albertbw011     0 Sep 11 20:35 file.txt
--rwxr-xr-x 1 albertbw011 albertbw011 18096 Sep 11 20:35 yash
--rw-r--r-- 1 albertbw011 albertbw011  7137 Sep 11 20:35 yash.c
+400
