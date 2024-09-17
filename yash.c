@@ -86,6 +86,7 @@ int main() {
 
 		// exit shell if Ctrl+D
         if (command == NULL) {
+			printf("\n");
             break;
         } 
 
@@ -95,14 +96,15 @@ int main() {
 			list_jobs();
 			continue;
 		} else if (strcmp(command, "fg") == 0) {
+			handle_fg();
 			continue;
 		} else if (strcmp(command, "bg") == 0) {
+			handle_bg();
 			continue;
 		}
 
 		Job *curr_job = parse_input(command);
 		execute_job(curr_job);
-		
 		free(command);
     }
     

@@ -60,6 +60,16 @@ int find_next_job_id();
 void list_jobs();
 
 /*
+Function for handling fg
+*/
+void handle_fg();
+
+/*
+Function for handling bg
+*/
+void handle_bg();
+
+/*
 Prints all completed jobs
 */
 void print_completed_jobs();

@@ -111,7 +111,6 @@ void remove_job(pid_t pgid) {
 				prev->next = current->next;
 			}
 			
-			// print_job(current);
 		    free_job(current);
 			return;
 		}
@@ -129,15 +128,49 @@ int find_next_job_id() {
 	Job *current = job_list;
 
 	while (current != NULL) {
-		if (current->jid == jid) {
-			jid++;
-			current = job_list;
+		if (current->jid >= jid) {
+			jid = current->jid + 1;
 		} else {
 			current = current->next;
 		}
 	}
 
 	return jid;
+}
+
+
+/*
+Returns most recent stopped/background job in the job list
+*/
+Job *most_recent_job() {
+	Job *current = job_list;
+	Job *most_recent = NULL;
+
+	while (current != NULL) {
+		if (current->status == STOPPED || current->background) {
+			most_recent = current;
+		}
+		current = current->next;
+	}
+
+	return most_recent;
+}
+
+/*
+Returns most recent stopped job in the job list
+*/
+Job *most_recent_stopped_job() {
+	Job *current = job_list;
+	Job *most_recent = NULL;
+
+	while (current != NULL) {
+		if (current->status == STOPPED) {
+			most_recent = current;
+		}
+		current = current->next;
+	}
+
+	return most_recent;
 }
 
 void list_jobs() {
@@ -151,6 +184,60 @@ void list_jobs() {
 		current->jobstring);
 		current = current->next;
 	}
+}
+
+/*
+Bring most recent stopped job to foreground
+*/
+void handle_fg() {
+	Job *job = most_recent_job();
+	
+	// send SIGCONT to most recent job
+	kill(-job->pgid, SIGCONT);
+
+	// give terminal control back to job and set to running
+	tcsetpgrp(STDIN_FILENO, job->pgid);
+	job->status = RUNNING;
+
+	// print out command again
+	char *print_cmd = strdup(job->jobstring);
+	int len = strlen(print_cmd);
+
+	if (len > 0 && print_cmd[len-1] == '&') {
+		print_cmd[len-1] = '\0';
+	}
+
+	printf("%s\n", print_cmd);
+
+	int status;
+	waitpid(-job->pgid, &status, WUNTRACED);
+
+	if (WIFEXITED(status) || WIFSIGNALED(status)) {
+		remove_job(job->pgid);
+	} else if (WIFSTOPPED(status)) {
+		job->status = STOPPED;
+	}
+
+	tcsetpgrp(STDIN_FILENO, getpgrp());
+}
+
+void handle_bg() {
+	Job *job = most_recent_stopped_job();
+
+	// send SIGCONT to most recent stopped job
+	kill(-job->pgid, SIGCONT);
+	job->background = 1;
+	job->status = RUNNING;
+
+	// print out command again
+	char *print_cmd = strdup(job->jobstring);
+	int len = strlen(print_cmd);
+
+	if (len > 0 && print_cmd[len-1] == '&') {
+		print_cmd[len-1] = '\0';
+	}
+
+	printf("%s\n", print_cmd);
 }
 
 /*
