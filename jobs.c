@@ -187,7 +187,7 @@ void list_jobs() {
 }
 
 /*
-Bring most recent stopped job to foreground
+Bring most recent stopped/background job to foreground
 */
 void handle_fg() {
 	Job *job = most_recent_job();
@@ -221,6 +221,9 @@ void handle_fg() {
 	tcsetpgrp(STDIN_FILENO, getpgrp());
 }
 
+/*
+Run most recent stopped job to background
+*/
 void handle_bg() {
 	Job *job = most_recent_stopped_job();
 
