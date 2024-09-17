@@ -158,7 +158,7 @@ Prints all completed jobs
 */
 void print_completed_jobs() {
 	for (int i = 0; i < completed_job_count; i++) {
-		printf("[%d]- Done\t\t%s\n", completed_jobs[i].jid, completed_jobs[i].command);
+		printf("[%d]-  Done\t\t%s\n", completed_jobs[i].jid, completed_jobs[i].command);
 		free(completed_jobs[i].command);
 	}
 

@@ -40,12 +40,10 @@ void sig_handler(int signo) {
         case SIGTSTP:
 		{
             Job *foreground = get_foreground_job();
-			// print_job(foreground);
 			write(STDOUT_FILENO, "\n", 1);
 			if (foreground != NULL) {
 				kill(-foreground->pgid, SIGTSTP);
 				foreground->status = STOPPED;
-				printf("Job pgid: %d status set to STOPPED\n", foreground->pgid);
 			} 
 			display_new();
             break;
@@ -91,6 +89,8 @@ int main() {
             break;
         } 
 
+		print_completed_jobs();
+
 		if (strcmp(command, "jobs") == 0) {
 			list_jobs();
 			continue;
@@ -102,8 +102,7 @@ int main() {
 
 		Job *curr_job = parse_input(command);
 		execute_job(curr_job);
-		print_completed_jobs();
-
+		
 		free(command);
     }
     
