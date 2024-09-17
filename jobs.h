@@ -20,16 +20,16 @@ void init_command(Command *cmd);
 void free_command(Command *cmd);
 
 /*
-For debugging purposes
-Prints each element of Command object
-*/
-void print_full_command(Command *cmd);
-
-/*
 Standard print function
 Prints only original command (not supported for pipes)
 */
 void print_command(Command *cmd);
+
+/*
+Prints pipe commands
+Includes "\n"
+*/
+void print_pipe_command(Command *left_command, Command *right_command);
 
 typedef enum { RUNNING, STOPPED } job_status;
 
@@ -43,12 +43,16 @@ typedef struct Job {
 	struct Job *next;
 } Job;
 
+extern Job *job_list;
+
 /*
 Initializes new Job struct
 */
 Job *create_job(Command *command, int background);
 
 Job *create_pipe_job(Command *cmd1, Command *cmd2, int background);
+
+void free_job(Job *job);
 
 void add_job(Job *new_job);
 
@@ -59,6 +63,8 @@ void list_jobs();
 Job *find_job_by_jid(int jid);
 
 Job *find_job_by_pgid(pid_t pgid);
+
+Job *get_foreground_job();
 
 /*
 Update necessary files based on input, output, error in Command struct

@@ -30,30 +30,33 @@ void free_command(Command *cmd) {
     if (cmd->input_file) free(cmd->input_file);
     if (cmd->output_file) free(cmd->output_file);
     if (cmd->error_file) free(cmd->error_file);
-}
-
-/*
-For debugging purposes
-Prints each element of Command object
-*/
-void print_full_command(Command *cmd) {
-    if (cmd->command) printf("command: %s\n", cmd->command);
-    if (cmd->args) {
-        for (int i = 0; cmd->args[i] != NULL; i++) 
-            printf("arg%d: %s\n", i, cmd->args[i]);
-    }
-    if (cmd->input_file) printf("input file: %s\n", cmd->input_file);
-    if (cmd->output_file) printf("output file: %s\n", cmd->output_file);
-    if (cmd->error_file) printf("error file: %s\n", cmd->error_file);
+	free(cmd);
 }
 
 /*
 Standard print function
 Prints only original command (not supported for pipes)
+Includes "\n"
 */
 void print_command(Command *cmd) {
 	for (int i = 0; cmd->args[i] != NULL; i++) 
-		printf("%s", cmd->args[i]);
+		printf("%s ", cmd->args[i]);
+	printf("\n");
+}
+
+/*
+Prints pipe commands
+Includes "\n"
+*/
+void print_pipe_command(Command *left_command, Command *right_command) {
+	for (int i = 0; left_command->args[i] != NULL; i++) 
+		printf("%s ", left_command->args[i]);
+	
+	printf(" | ");
+
+	for (int i = 0; right_command->args[i] != NULL; i++) 
+		printf("%s ", right_command->args[i]);
+
 	printf("\n");
 }
 
@@ -73,21 +76,21 @@ Job *create_job(Command *command, int background) {
 	return job;
 }
 
-Job *create_pipe_job(Command *cmd1, Command *cmd2, int background) {
-	Job *job = malloc(sizeof(Job));
-	job->jid = next_jid++;
-	job->pgid = 0;
-	job->command = cmd1;
-	job->command2 = cmd2;
-	job->status = RUNNING;
-	job->next = NULL;
-	job->background = background;
-
+Job *create_pipe_job(Command *command1, Command *command2, int background) {
+	Job *job = create_job(command1, background);
+	job->command2 = command2;
+	
 	return job;
 }
 
+void free_job(Job *job) {
+	if (job->command) free_command(job->command);
+	if (job->command2) free_command(job->command2);
+	free(job);
+}
+
+// add job to the end of the linked list
 void add_job(Job *new_job) {
-	// add job to the end of the linked list
 	if (job_list == NULL) {
 		job_list = new_job;
 	} else {
@@ -99,6 +102,10 @@ void add_job(Job *new_job) {
 	}
 }
 
+/*
+Removes job from job list with given pgid
+Deletes job from memory
+*/
 void remove_job(pid_t pgid) {
 	Job *prev = NULL;
 	Job *current = job_list;
@@ -111,9 +118,7 @@ void remove_job(pid_t pgid) {
 				prev->next = current->next;
 			}
 
-			if (current->command2 != NULL) free_command(current->command2);
-			free_command(current->command);
-			free(current);
+			free_job(current);
 			return;
 		}
 
@@ -126,7 +131,7 @@ void list_jobs() {
 	Job *current = job_list;
 
 	while (current != NULL) {
-		printf("[%d] %s %s\t", current->jid, current->background ? "-" : "+", (current->status == RUNNING) ? "Running" : "Stopped");
+		printf("[%d] %s %s\t\t\t", current->jid, current->background ? "-" : "+", (current->status == RUNNING) ? "Running" : "Stopped");
 		print_command(current->command);
 		current = current->next;
 	}
@@ -140,7 +145,6 @@ Job *find_job_by_jid(int jid) {
 			return current;
 		} 
 		current = current->next;
-		
 	}
 
 	return NULL;
@@ -159,12 +163,23 @@ Job *find_job_by_pgid(pid_t pgid) {
 	return NULL;
 }
 
+Job *get_foreground_job() {
+	Job *current = job_list;
+
+	while (current != NULL) {
+		if (current->background == 0) 
+			return current;
+		current = current->next;
+	}
+
+	return NULL;
+}
+
 /*
 Update necessary files based on input, output, error in Command struct
 */
 int handle_redirection(Command *cmd) {
     int fd;
-
     if (cmd->input_file != NULL) {
         fd = open(cmd->input_file, O_RDONLY);
         if (fd < 0) {
@@ -177,7 +192,6 @@ int handle_redirection(Command *cmd) {
         }
         close(fd);
     }
-
     if (cmd->output_file != NULL) {
         fd = open(cmd->output_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
         if (dup2(fd, STDOUT_FILENO) < 0) {
@@ -186,7 +200,6 @@ int handle_redirection(Command *cmd) {
         }
         close(fd);
     }
-
     if (cmd->error_file != NULL) {
         fd = open(cmd->error_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
         if (dup2(fd, STDERR_FILENO) < 0) {
@@ -195,13 +208,12 @@ int handle_redirection(Command *cmd) {
         }
         close(fd);
     }
-
     return 0;
 }
 
 /*
 Executes job commands with execvp()
-Handles cases with pipes and standard commands
+Handles standard commands
 */
 void execute_job(Job *job) {
 	if (job->command2 == NULL) {
@@ -210,22 +222,28 @@ void execute_job(Job *job) {
 		pid1 = fork();
 
 		if (pid1 < 0) {
+			// fork error
 			perror("fork error");
 			exit(EXIT_FAILURE);
 		} else if (pid1 == 0) {
+			// child process
 			setpgid(0, 0);
 			if (handle_redirection(cmd) == 0) {
 				if (execvp(cmd->command, cmd->args) == -1)
 					exit(EXIT_FAILURE);
 			} 
 		} else {
-			setpgid(pid1, pid1);   
+			// parent process
+			setpgid(pid1, pid1);  
+			job->pgid = pid1;
+			add_job(job); 
+			int status;
 
 			if (job->background) {
-				printf("[%d] %d\n", job->jid, job->pgid);
+				printf("[%d] ", job->jid);
+				print_command(cmd);
 			} else { 
-				int status;
-				waitpid(pid1, &status, WUNTRACED);
+				waitpid(-pid1, &status, WUNTRACED);
 				if (WIFSTOPPED(status)) {
 					job->status = STOPPED;
 				} else {
@@ -247,6 +265,7 @@ void execute_job(Job *job) {
 
 		pid1 = fork();
 		if (pid1 < 0) {
+			// fork error
 			perror("fork error");
 			exit(EXIT_FAILURE);
 		} else if (pid1 == 0) {
@@ -262,6 +281,7 @@ void execute_job(Job *job) {
 
 		pid2 = fork();
 		if (pid2 < 0) {
+			// fork error
 			perror("fork error");
 			exit(EXIT_FAILURE);
 		} else if (pid2 == 0) {
@@ -283,11 +303,16 @@ void execute_job(Job *job) {
 		job->pgid = pid1;
 		add_job(job);
 
-		waitpid(pid1, &status, WUNTRACED);
-		waitpid(pid2, &status, WUNTRACED);
-
-		if (!WIFSTOPPED(status)) {
-			remove_job(job->pgid);
+		if (job->background) {
+			printf("[%d] ", job->jid);
+			print_pipe_command(left_command, right_command);
+		} else {
+			waitpid(-pid1, &status, WUNTRACED);
+			if (WIFSTOPPED(status)) {
+				job->status = STOPPED;
+			} else {
+				remove_job(job->pgid);
+			}
 		}
 	}
 }
