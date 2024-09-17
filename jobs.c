@@ -5,15 +5,16 @@
 #include <linux/stat.h>
 #include <sys/wait.h>
 #include <stdio.h>
+#include <string.h>
+
 #include "jobs.h"
 
-Job *job_list = NULL; 	
-int next_jid = 1;
-pid_t pid1 = -1;
-pid_t pid2 = -1;
+Job *job_list = NULL;
+CompletedJob completed_jobs[MAX_JOBS];
+int completed_job_count = 0;
 
 void init_command(Command *cmd) {
-    cmd->command = NULL;
+	cmd->commandstring = NULL;
     cmd->args = NULL;
     cmd->input_file = NULL;
     cmd->output_file = NULL;
@@ -21,7 +22,8 @@ void init_command(Command *cmd) {
 }
 
 void free_command(Command *cmd) {
-    if (cmd->command) free(cmd->command);
+	if (cmd == NULL) return;
+	if (cmd->commandstring) free(cmd->commandstring);
     if (cmd->args) {
         for (int i = 0; cmd->args[i] != NULL; i++)
             free(cmd->args[i]);
@@ -34,39 +36,12 @@ void free_command(Command *cmd) {
 }
 
 /*
-Standard print function
-Prints only original command (not supported for pipes)
-Includes "\n"
-*/
-void print_command(Command *cmd) {
-	for (int i = 0; cmd->args[i] != NULL; i++) 
-		printf("%s ", cmd->args[i]);
-	printf("\n");
-}
-
-/*
-Prints pipe commands
-Includes "\n"
-*/
-void print_pipe_command(Command *left_command, Command *right_command) {
-	for (int i = 0; left_command->args[i] != NULL; i++) 
-		printf("%s ", left_command->args[i]);
-	
-	printf(" | ");
-
-	for (int i = 0; right_command->args[i] != NULL; i++) 
-		printf("%s ", right_command->args[i]);
-
-	printf("\n");
-}
-
-/*
 Initializes new Job struct
 */
-Job *create_job(Command *command, int background) {
+Job *create_job(Command *command, char *jobstring, int background) {
 	Job *job = malloc(sizeof(Job));
-	job->jid = next_jid++;
 	job->pgid = 0;
+	job->jobstring = jobstring;
 	job->command = command;
 	job->command2 = NULL;
 	job->status = RUNNING;
@@ -76,21 +51,39 @@ Job *create_job(Command *command, int background) {
 	return job;
 }
 
-Job *create_pipe_job(Command *command1, Command *command2, int background) {
-	Job *job = create_job(command1, background);
+void print_job(Job *job) {
+	printf("jid: %d\n", job->jid);
+	printf("pgid: %d\n", job ->pgid);
+	printf("command: %s\n", job->jobstring);
+	printf("status: %s\n", (job->status == RUNNING) ? "Running" : "Stopped");
+	printf("next: %s\n", (job->next) ? "yes" : "no");
+	printf("background: %d\n", job->background);
+}
+
+Job *create_pipe_job(Command *command1, Command *command2, char *commandstring, int background) {
+	Job *job = create_job(command1, commandstring, background);
 	job->command2 = command2;
 	
 	return job;
 }
 
+/*
+Frees job from memory
+Also frees pointer to job
+*/
 void free_job(Job *job) {
-	if (job->command) free_command(job->command);
+	Command *cmd = job->command;
+	if (job == NULL) return;
+	if (job->command) free_command(job->command); 
 	if (job->command2) free_command(job->command2);
+	if (job->jobstring) free(job->jobstring);
 	free(job);
 }
 
 // add job to the end of the linked list
 void add_job(Job *new_job) {
+	new_job->jid = find_next_job_id(); 
+
 	if (job_list == NULL) {
 		job_list = new_job;
 	} else {
@@ -117,8 +110,9 @@ void remove_job(pid_t pgid) {
 			} else {
 				prev->next = current->next;
 			}
-
-			free_job(current);
+			
+			// print_job(current);
+		    free_job(current);
 			return;
 		}
 
@@ -127,27 +121,48 @@ void remove_job(pid_t pgid) {
 	}
 }
 
-void list_jobs() {
-	Job *current = job_list;
-
-	while (current != NULL) {
-		printf("[%d] %s %s\t\t\t", current->jid, current->background ? "-" : "+", (current->status == RUNNING) ? "Running" : "Stopped");
-		print_command(current->command);
-		current = current->next;
-	}
-}
-
-Job *find_job_by_jid(int jid) {
+/*
+Finds lowest available job number
+*/
+int find_next_job_id() {
+	int jid = 1;
 	Job *current = job_list;
 
 	while (current != NULL) {
 		if (current->jid == jid) {
-			return current;
-		} 
-		current = current->next;
+			jid++;
+			current = job_list;
+		} else {
+			current = current->next;
+		}
 	}
 
-	return NULL;
+	return jid;
+}
+
+void list_jobs() {
+	Job *current = job_list;
+
+	while (current != NULL) {
+		printf("[%d]%s  %s\t\t%s\n", 
+		current->jid, 
+		current->next ? "-" : "+", 
+		(current->status == RUNNING) ? "Running" : "Stopped", 
+		current->jobstring);
+		current = current->next;
+	}
+}
+
+/*
+Prints all completed jobs
+*/
+void print_completed_jobs() {
+	for (int i = 0; i < completed_job_count; i++) {
+		printf("[%d]- Done\t\t%s\n", completed_jobs[i].jid, completed_jobs[i].command);
+		free(completed_jobs[i].command);
+	}
+
+	completed_job_count = 0;
 }
 
 Job *find_job_by_pgid(pid_t pgid) {
@@ -219,37 +234,39 @@ void execute_job(Job *job) {
 	if (job->command2 == NULL) {
 		// execute standard command with no pipe
 		Command *cmd = job->command;
-		pid1 = fork();
+		pid_t pid = fork();
 
-		if (pid1 < 0) {
+		if (pid < 0) {
 			// fork error
 			perror("fork error");
 			exit(EXIT_FAILURE);
-		} else if (pid1 == 0) {
+		} else if (pid == 0) {
 			// child process
 			setpgid(0, 0);
 			if (handle_redirection(cmd) == 0) {
-				if (execvp(cmd->command, cmd->args) == -1)
-					exit(EXIT_FAILURE);
+				execvp(cmd->args[0], cmd->args);
+				exit(EXIT_FAILURE);
 			} 
 		} else {
 			// parent process
-			setpgid(pid1, pid1);  
-			job->pgid = pid1;
+			setpgid(pid, pid); 
+			// printf("bash pid: %d \t yash pid: %d\n", getpgrp(), pid);
+			tcsetpgrp(STDIN_FILENO, pid);
+			job->pgid = pid;
 			add_job(job); 
-			int status;
 
-			if (job->background) {
-				printf("[%d] ", job->jid);
-				print_command(cmd);
-			} else { 
-				waitpid(-pid1, &status, WUNTRACED);
-				if (WIFSTOPPED(status)) {
-					job->status = STOPPED;
-				} else {
+			if (!job->background) { 
+				// wait for child process
+				int status;
+				waitpid(-pid, &status, WUNTRACED);
+				if (WIFEXITED(status) || WIFSIGNALED(status)) {
 					remove_job(job->pgid);
+				} else if (WIFSTOPPED(status)) {
+					job->status = STOPPED;
 				}
 			}
+
+			tcsetpgrp(STDIN_FILENO, getpgrp());
 		}
 	} else {
 		// exceute pipe command
@@ -263,56 +280,62 @@ void execute_job(Job *job) {
 			exit(EXIT_FAILURE);
 		}
 
-		pid1 = fork();
+		pid_t pid1 = fork();
 		if (pid1 < 0) {
 			// fork error
 			perror("fork error");
 			exit(EXIT_FAILURE);
 		} else if (pid1 == 0) {
+			// child process
 			setpgid(0, 0);
 			close(pipefd[0]);
 			dup2(pipefd[1], STDOUT_FILENO);
 			close(pipefd[1]);
-			if (execvp(left_command->command, left_command->args) == -1) {
-				printf("%s: command not found\n", left_command->command);
-				exit(EXIT_FAILURE);
-			}
+
+			// execute command
+			execvp(left_command->args[0], left_command->args);
+			printf("%s: command not found\n", left_command->commandstring);
+			exit(EXIT_FAILURE);
 		} 
 
-		pid2 = fork();
+		pid_t pid2 = fork();
 		if (pid2 < 0) {
 			// fork error
 			perror("fork error");
 			exit(EXIT_FAILURE);
 		} else if (pid2 == 0) {
+			// child process
 			setpgid(0, pid1);
 			close(pipefd[1]);
 			dup2(pipefd[0], STDIN_FILENO);
 			close(pipefd[0]);
-			if (execvp(right_command->command, right_command->args) == -1) {
-				printf("%s: command not found\n", right_command->command);
-				exit(EXIT_FAILURE);
-			}
+
+			// execute command
+			execvp(right_command->args[0], right_command->args);
+			printf("%s: command not found\n", right_command->commandstring);
+			exit(EXIT_FAILURE);
 		}
 
 		close(pipefd[0]);
 		close(pipefd[1]);
 		setpgid(pid1, pid1);
 		setpgid(pid2, pid1);
+		tcsetpgrp(STDIN_FILENO, pid1);
 
 		job->pgid = pid1;
 		add_job(job);
 
-		if (job->background) {
-			printf("[%d] ", job->jid);
-			print_pipe_command(left_command, right_command);
-		} else {
+		if (!job->background) { 
+			// wait for child process
+			int status;
 			waitpid(-pid1, &status, WUNTRACED);
-			if (WIFSTOPPED(status)) {
-				job->status = STOPPED;
-			} else {
+			if (WIFEXITED(status) || WIFSIGNALED(status)) {
 				remove_job(job->pgid);
+			} else if (WIFSTOPPED(status)) {
+				job->status = STOPPED;
 			}
 		}
+
+		tcsetpgrp(STDIN_FILENO, getpgrp());
 	}
 }

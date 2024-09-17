@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <string.h>
+
 #include "parsing.h"
 #include "jobs.h"
 
@@ -25,15 +26,16 @@ Parses input string into Job object
 Job *parse_input(char *input) {
 	char *pipe_pos = strchr(input, '|');
 	int background = (strchr(input, '&') != NULL) ? 1 : 0;
+	char *input_copy = strdup(input);
 
 	if (pipe_pos != NULL) {
 		*pipe_pos = '\0';
 		Command *left_command = parse_command(input);
 		Command *right_command = parse_command(pipe_pos+1);
-		return create_pipe_job(left_command, right_command, background);
+		return create_pipe_job(left_command, right_command, input_copy, background);
 	} else {
 		Command *cmd = parse_command(input);
-		return create_job(cmd, background);
+		return create_job(cmd, input_copy, background);
 	}
 }
 
@@ -48,21 +50,22 @@ Command *parse_command(char *input) {
 	Command *cmd = (Command* ) malloc(sizeof(Command));
 	init_command(cmd);
 
-	cmd->args = (char** ) malloc(args_size * sizeof(char));
+	cmd->args = (char** ) malloc(args_size * sizeof(char* ));
+	cmd->commandstring = strdup(input);
 	token = strtok_r(input, DELIM, &save_ptr);
 
-	while (token != NULL && strcmp(token, "&") != 0) {
+	while (token != NULL) {
         if (strcmp(token, ">") == 0 || strcmp(token, "<") == 0 || strcmp(token, "2>") == 0) {
             parse_redirection(cmd, token, &save_ptr);
         } else {
-            if (cmd->command == NULL)
-                cmd->command = strdup(token);
-
             if (arg_index >= args_size - 1) {
                 args_size *= 2;
                 cmd->args = (char **) realloc(cmd->args, args_size * sizeof(char *));
             } 
-            cmd->args[arg_index++] = strdup(token);
+
+			if (strcmp(token, "&") != 0) {
+            	cmd->args[arg_index++] = strdup(token);
+			}
         }
 
         token = strtok_r(NULL, DELIM, &save_ptr);
