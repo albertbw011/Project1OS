@@ -1,5 +1,5 @@
 yash: yash.c jobs.c parsing.c
-	gcc -o yash yash.c jobs.c parsing.c -l readline
+	gcc -std=c11 -o yash yash.c jobs.c parsing.c -l readline
 
 run: yash
 	./yash
