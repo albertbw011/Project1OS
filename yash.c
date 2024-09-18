@@ -12,6 +12,9 @@
 #include "parsing.h"
 #include "jobs.h"
 
+/*
+Generate cleaner new line
+*/
 void display_new() {
 	rl_replace_line("", 0);
 	rl_on_new_line();
@@ -54,7 +57,7 @@ void sig_handler(int signo) {
             int status;
             pid_t pid;
 
-            while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+            while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
                 Job *current = find_job_by_pgid(pid);
 				if (current && current->background) {
 					if (WIFEXITED(status) || WIFSIGNALED(status)) {
@@ -63,6 +66,8 @@ void sig_handler(int signo) {
 
 						// remove job and set up shell for new line
 						remove_job(pid);
+					} else if (WIFSTOPPED(status)) {
+						current->status = STOPPED;
 					}
 				}
 			}
@@ -94,12 +99,15 @@ int main() {
 
 		if (strcmp(command, "jobs") == 0) {
 			list_jobs();
+			free(command);
 			continue;
 		} else if (strcmp(command, "fg") == 0) {
 			handle_fg();
+			free(command);
 			continue;
 		} else if (strcmp(command, "bg") == 0) {
 			handle_bg();
+			free(command);
 			continue;
 		}
 

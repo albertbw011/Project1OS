@@ -32,8 +32,8 @@ typedef struct Job {
 	Command *command; // job command (1st command if there is a pipe)
 	Command *command2; // for pipes 
 	job_status status; // RUNNING or STOPPED
-	int background; // bg or fg 
-	struct Job *next;
+	int background; // 1 for bg, 0 for fg
+	struct Job *next; // pointer to next job in list
 } Job;
 
 extern Job *job_list;
@@ -81,7 +81,7 @@ Job *get_foreground_job();
 /*
 Update necessary files based on input, output, error in Command struct
 */
-int handle_redirection(Command *cmd);
+void handle_redirection(Command *cmd, int output_fd);
 
 /*
 Executes job commands with execvp()

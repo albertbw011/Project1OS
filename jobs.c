@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 
 #include "jobs.h"
 
@@ -35,6 +36,15 @@ void free_command(Command *cmd) {
 	free(cmd);
 }
 
+void print_command(Command *cmd) {
+	printf("commandstring: %s\n", cmd->commandstring);
+	for (int i = 0; cmd->args[i] != NULL; i++)
+		printf("arg[%d]: %s\n", i, cmd->args[i]);
+	printf("input_file: %s\n", cmd->input_file != NULL ? cmd->input_file : "None");
+	printf("output_file: %s\n", cmd->output_file != NULL ? cmd->output_file : "None");
+	printf("error_file: %s\n", cmd->error_file != NULL ? cmd->error_file : "None");
+}
+
 /*
 Initializes new Job struct
 */
@@ -54,7 +64,9 @@ Job *create_job(Command *command, char *jobstring, int background) {
 void print_job(Job *job) {
 	printf("jid: %d\n", job->jid);
 	printf("pgid: %d\n", job ->pgid);
-	printf("command: %s\n", job->jobstring);
+	printf("jobstring: %s\n", job->jobstring);
+	printf("command1string: %s\n", job->command->commandstring);
+	if (job->command2) printf("command2string: %s\n", job->command2->commandstring);
 	printf("status: %s\n", (job->status == RUNNING) ? "Running" : "Stopped");
 	printf("next: %s\n", (job->next) ? "yes" : "no");
 	printf("background: %d\n", job->background);
@@ -72,7 +84,6 @@ Frees job from memory
 Also frees pointer to job
 */
 void free_job(Job *job) {
-	Command *cmd = job->command;
 	if (job == NULL) return;
 	if (job->command) free_command(job->command); 
 	if (job->command2) free_command(job->command2);
@@ -192,55 +203,62 @@ Bring most recent stopped/background job to foreground
 void handle_fg() {
 	Job *job = most_recent_job();
 	
-	// send SIGCONT to most recent job
-	kill(-job->pgid, SIGCONT);
+	if (job) {
+		// send SIGCONT to most recent job
+		kill(-job->pgid, SIGCONT);
 
-	// give terminal control back to job and set to running
-	tcsetpgrp(STDIN_FILENO, job->pgid);
-	job->status = RUNNING;
+		// give terminal control back to job and set to running
+		tcsetpgrp(STDIN_FILENO, job->pgid);
+		job->status = RUNNING;
+		job->background = 0;
 
-	// print out command again
-	char *print_cmd = strdup(job->jobstring);
-	int len = strlen(print_cmd);
+		// print out command again
+		char *print_cmd = strdup(job->jobstring);
+		int len = strlen(print_cmd);
 
-	if (len > 0 && print_cmd[len-1] == '&') {
-		print_cmd[len-1] = '\0';
+		if (len > 0 && print_cmd[len-1] == '&') {
+			print_cmd[len-1] = '\0';
+		}
+
+		printf("%s\n", print_cmd);
+		free(print_cmd);
+
+		int status;
+		waitpid(-job->pgid, &status, WUNTRACED);
+
+		if (WIFEXITED(status) || WIFSIGNALED(status)) {
+			remove_job(job->pgid);
+		} else if (WIFSTOPPED(status)) {
+			job->status = STOPPED;
+		}
+
+		tcsetpgrp(STDIN_FILENO, getpgrp());
 	}
-
-	printf("%s\n", print_cmd);
-
-	int status;
-	waitpid(-job->pgid, &status, WUNTRACED);
-
-	if (WIFEXITED(status) || WIFSIGNALED(status)) {
-		remove_job(job->pgid);
-	} else if (WIFSTOPPED(status)) {
-		job->status = STOPPED;
-	}
-
-	tcsetpgrp(STDIN_FILENO, getpgrp());
 }
 
 /*
-Run most recent stopped job to background
+Run most recent stopped job in background
 */
 void handle_bg() {
 	Job *job = most_recent_stopped_job();
 
-	// send SIGCONT to most recent stopped job
-	kill(-job->pgid, SIGCONT);
-	job->background = 1;
-	job->status = RUNNING;
+	if (job) {
+		// send SIGCONT to most recent stopped job
+		kill(-job->pgid, SIGCONT);
+		job->background = 1;
+		job->status = RUNNING;
 
-	// print out command again
-	char *print_cmd = strdup(job->jobstring);
-	int len = strlen(print_cmd);
+		// print out command again
+		char *print_cmd = strdup(job->jobstring);
+		int len = strlen(print_cmd);
 
-	if (len > 0 && print_cmd[len-1] == '&') {
-		print_cmd[len-1] = '\0';
-	}
+		if (len > 0 && print_cmd[len-1] == '&') {
+			print_cmd[len-1] = '\0';
+		}
 
-	printf("%s\n", print_cmd);
+		printf("%s\n", print_cmd);
+		free(print_cmd);
+	} 
 }
 
 /*
@@ -283,42 +301,41 @@ Job *get_foreground_job() {
 /*
 Update necessary files based on input, output, error in Command struct
 */
-int handle_redirection(Command *cmd) {
+void handle_redirection(Command *cmd, int fd_output) {
     int fd;
     if (cmd->input_file != NULL) {
         fd = open(cmd->input_file, O_RDONLY);
-        if (fd < 0) {
-            perror(cmd->input_file);
-            return -1;
-        }
-        if (dup2(fd, STDIN_FILENO) < 0) {
-            close(fd);
-            return -1;
-        }
+		if (fd == -1) {
+			exit(EXIT_FAILURE);
+		}
+        dup2(fd, STDIN_FILENO);
         close(fd);
     }
+
     if (cmd->output_file != NULL) {
         fd = open(cmd->output_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-        if (dup2(fd, STDOUT_FILENO) < 0) {
-            close(fd);
-            return -1;
-        }
+		if (fd == -1) {
+			exit(EXIT_FAILURE);
+		}
+		dup2(fd, STDOUT_FILENO);
         close(fd);
-    }
+    } else if (fd_output != -1) {
+		dup2(fd_output, STDOUT_FILENO);
+	}
+
     if (cmd->error_file != NULL) {
         fd = open(cmd->error_file, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-        if (dup2(fd, STDERR_FILENO) < 0) {
-            close(fd);
-            return -1;
-        }
-        close(fd);
+		if (fd == -1) {
+			exit(EXIT_FAILURE);
+		}
+        dup2(fd, STDERR_FILENO);
+		close(fd);
     }
-    return 0;
 }
 
 /*
 Executes job commands with execvp()
-Handles standard commands
+Handles standard commands and pipes
 */
 void execute_job(Job *job) {
 	if (job->command2 == NULL) {
@@ -333,10 +350,9 @@ void execute_job(Job *job) {
 		} else if (pid == 0) {
 			// child process
 			setpgid(0, 0);
-			if (handle_redirection(cmd) == 0) {
-				execvp(cmd->args[0], cmd->args);
-				exit(EXIT_FAILURE);
-			} 
+			handle_redirection(cmd, -1);
+			execvp(cmd->args[0], cmd->args);
+			exit(EXIT_FAILURE);
 		} else {
 			// parent process
 			setpgid(pid, pid); 
@@ -378,13 +394,16 @@ void execute_job(Job *job) {
 		} else if (pid1 == 0) {
 			// child process
 			setpgid(0, 0);
+
+			handle_redirection(left_command, left_command->output_file ? -1 : pipefd[1]);
+
+			// close pipe ends
 			close(pipefd[0]);
-			dup2(pipefd[1], STDOUT_FILENO);
 			close(pipefd[1]);
 
 			// execute command
 			execvp(left_command->args[0], left_command->args);
-			printf("%s: command not found\n", left_command->commandstring);
+			printf("%s: command not found\n", left_command->args[0]);
 			exit(EXIT_FAILURE);
 		} 
 
@@ -396,13 +415,20 @@ void execute_job(Job *job) {
 		} else if (pid2 == 0) {
 			// child process
 			setpgid(0, pid1);
+
+			if (right_command->input_file) {
+				handle_redirection(right_command, -1);
+			} else {
+				dup2(pipefd[0], STDIN_FILENO);
+				handle_redirection(right_command, STDOUT_FILENO);
+			}
+			
 			close(pipefd[1]);
-			dup2(pipefd[0], STDIN_FILENO);
 			close(pipefd[0]);
 
 			// execute command
 			execvp(right_command->args[0], right_command->args);
-			printf("%s: command not found\n", right_command->commandstring);
+			printf("%s: command not found\n", right_command->args[0]);
 			exit(EXIT_FAILURE);
 		}
 
