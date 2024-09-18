@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -9,6 +10,9 @@
 #include <signal.h>
 
 #include "jobs.h"
+
+// extern int kill(pid_t pid, int sig);
+// extern char *strdup(const char*);
 
 Job *job_list = NULL;
 CompletedJob completed_jobs[MAX_JOBS];

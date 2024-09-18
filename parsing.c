@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdlib.h>
 #include <stdio.h>
 #include <fcntl.h>
@@ -5,6 +6,9 @@
 
 #include "parsing.h"
 #include "jobs.h"
+
+// extern char *strdup(const char*);
+// extern char *strtok_r(char *str, const char *delim, char **saveptr);
 
 /*
 Update command struct based on the file redirection symbol

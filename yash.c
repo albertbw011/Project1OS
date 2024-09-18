@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,9 @@
 
 #include "parsing.h"
 #include "jobs.h"
+
+// extern char *strdup(const char*);
+// extern int kill(pid_t pid, int sig);
 
 /*
 Generate cleaner new line
@@ -76,11 +80,22 @@ void sig_handler(int signo) {
     }
 }
 
+// Setting up signal handlers using sigaction()
 void setup_signal_handlers() {
-    signal(SIGINT, sig_handler);
-    signal(SIGTSTP, sig_handler);
-    signal(SIGCHLD, sig_handler);
-	signal(SIGTTOU, SIG_IGN);
+    struct sigaction sa;
+
+    // Handle SIGINT (Ctrl+C)
+    sa.sa_handler = sig_handler;
+    sigaction(SIGINT, &sa, NULL);
+
+    // Handle SIGTSTP (Ctrl+Z)
+    sigaction(SIGTSTP, &sa, NULL);
+
+    // Handle SIGCHLD
+    sigaction(SIGCHLD, &sa, NULL);
+
+    // Ignore SIGTTOU (background processes trying to write to the terminal)
+    signal(SIGTTOU, SIG_IGN);
 }
 
 int main() {
@@ -99,20 +114,15 @@ int main() {
 
 		if (strcmp(command, "jobs") == 0) {
 			list_jobs();
-			free(command);
-			continue;
 		} else if (strcmp(command, "fg") == 0) {
 			handle_fg();
-			free(command);
-			continue;
 		} else if (strcmp(command, "bg") == 0) {
 			handle_bg();
-			free(command);
-			continue;
+		} else {
+			Job *curr_job = parse_input(command);
+			execute_job(curr_job);
 		}
 
-		Job *curr_job = parse_input(command);
-		execute_job(curr_job);
 		free(command);
     }
     
